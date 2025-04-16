@@ -35,7 +35,8 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
-export const VENICE_BASE_URL = process.env["VENICE_BASE_URL"] || "https://api.venice.ai/api/v1";
+export const VENICE_BASE_URL =
+  process.env["VENICE_BASE_URL"] || "https://api.venice.ai/api/v1";
 export let VENICE_API_KEY = process.env["VENICE_API_KEY"] || "";
 export const VENICE_MODEL = process.env["VENICE_MODEL"] || "deepseek-r1-671b";
 

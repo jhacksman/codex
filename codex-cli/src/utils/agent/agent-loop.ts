@@ -9,12 +9,12 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { 
-  OPENAI_BASE_URL, 
-  OPENAI_TIMEOUT_MS, 
+import {
+  OPENAI_BASE_URL,
+  OPENAI_TIMEOUT_MS,
   VENICE_BASE_URL,
   VENICE_API_KEY,
-  VENICE_MODEL
+  VENICE_MODEL,
 } from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
@@ -248,7 +248,7 @@ export class AgentLoop {
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     this.provider = this.config.provider || "openai";
-    
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -265,7 +265,7 @@ export class AgentLoop {
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
-    
+
     if (this.provider === "venice") {
       const veniceApiKey = this.config.veniceApiKey ?? VENICE_API_KEY ?? "";
       const veniceConfig: VeniceConfig = {
@@ -522,11 +522,42 @@ export class AgentLoop {
             }
             // eslint-disable-next-line no-await-in-loop
             if (this.provider === "venice" && this.venice) {
-              stream = this.venice.responses({
+              const veniceStream = this.venice.responses({
                 instructions: mergedInstructions,
                 input: turnInput,
                 stream: true,
               });
+              
+              stream = (async function* () {
+                for await (const veniceResponse of veniceStream) {
+                  const content = veniceResponse.content?.[0]?.text || "";
+                  const responseId = veniceResponse.id;
+                  
+                  if (veniceResponse.type === "response.completed") {
+                    yield {
+                      type: "response.completed",
+                      response: {
+                        id: responseId,
+                        status: "completed",
+                        output: veniceResponse.content || [],
+                      },
+                    };
+                  } else {
+                    yield {
+                      type: "response.output_item.done",
+                      item: {
+                        type: "input_text",
+                        text: content,
+                      },
+                      response: {
+                        id: responseId,
+                        status: "in_progress",
+                        output: veniceResponse.content || [],
+                      },
+                    };
+                  }
+                }
+              })();
             } else {
               stream = await this.oai.responses.create({
                 model: this.model,
@@ -540,7 +571,8 @@ export class AgentLoop {
                   {
                     type: "function",
                     name: "shell",
-                    description: "Runs a shell command, and returns its output.",
+                    description:
+                      "Runs a shell command, and returns its output.",
                     strict: false,
                     parameters: {
                       type: "object",
@@ -721,7 +753,7 @@ export class AgentLoop {
               if (maybeReasoning.type === "reasoning") {
                 maybeReasoning.duration_ms = Date.now() - thinkingStart;
               }
-              if (item.type === "function_call") {
+              if (item && item.type === "function_call") {
                 // Track outstanding tool call so we can abort later if needed.
                 // The item comes from the streaming response, therefore it has
                 // either `id` (chat) or `call_id` (responses) – we normalise
@@ -746,7 +778,7 @@ export class AgentLoop {
               if (event.response.status === "completed") {
                 // TODO: remove this once we can depend on streaming events
                 const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output,
+                  event.response.output as any,
                   stageItem,
                 );
                 turnInput = newTurnInput;

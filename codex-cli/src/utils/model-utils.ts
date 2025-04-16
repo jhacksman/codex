@@ -59,7 +59,7 @@ export async function getAvailableModels(): Promise<Array<string>> {
  */
 export async function isModelSupportedForResponses(
   model: string | undefined | null,
-  provider: string = "openai"
+  provider: string = "openai",
 ): Promise<boolean> {
   if (
     typeof model !== "string" ||

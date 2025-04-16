@@ -175,7 +175,7 @@ const imagePaths = cli.flags.image as Array<string> | undefined;
 config = {
   apiKey,
   ...config,
-  provider: cli.flags.provider || config.provider || "openai",
+  provider: (cli.flags.provider as "openai" | "venice" | undefined) || config.provider || "openai",
   model: model ?? config.model,
 };
 
