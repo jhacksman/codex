@@ -35,9 +35,17 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+export const VENICE_BASE_URL =
+  process.env["VENICE_BASE_URL"] || "https://api.venice.ai/api/v1";
+export let VENICE_API_KEY = process.env["VENICE_API_KEY"] || "";
+export const VENICE_MODEL = process.env["VENICE_MODEL"] || "deepseek-r1-671b";
 
-export function setApiKey(apiKey: string): void {
-  OPENAI_API_KEY = apiKey;
+export function setApiKey(apiKey: string, provider: string = "openai"): void {
+  if (provider === "venice") {
+    VENICE_API_KEY = apiKey;
+  } else {
+    OPENAI_API_KEY = apiKey;
+  }
 }
 
 // Formatting (quiet mode-only).
@@ -49,6 +57,8 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  provider?: "openai" | "venice";
+  veniceModel?: string;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -70,6 +80,9 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  provider?: "openai" | "venice";
+  veniceApiKey?: string;
+  veniceModel?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -254,6 +267,8 @@ export const loadConfig = (
         ? DEFAULT_FULL_CONTEXT_MODEL
         : DEFAULT_AGENTIC_MODEL),
     instructions: combinedInstructions,
+    provider: storedConfig.provider || "openai",
+    veniceModel: storedConfig.veniceModel || VENICE_MODEL,
   };
 
   // -----------------------------------------------------------------------

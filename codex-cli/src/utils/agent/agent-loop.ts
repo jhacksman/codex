@@ -9,7 +9,13 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import {
+  OPENAI_BASE_URL,
+  OPENAI_TIMEOUT_MS,
+  VENICE_BASE_URL,
+  VENICE_API_KEY,
+  VENICE_MODEL,
+} from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -19,6 +25,7 @@ import {
   setSessionId,
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
+import { VeniceClient, type VeniceConfig } from "../venice/client.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
@@ -51,6 +58,7 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
+  private provider: "openai" | "venice";
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -58,6 +66,7 @@ export class AgentLoop {
   // the OpenAI SDK types may not perfectly match. The `typeof OpenAI` pattern captures the
   // instance shape without resorting to `any`.
   private oai: OpenAI;
+  private venice: VeniceClient | null = null;
 
   private onItem: (item: ResponseItem) => void;
   private onLoading: (loading: boolean) => void;
@@ -238,6 +247,8 @@ export class AgentLoop {
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    this.provider = this.config.provider || "openai";
+
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -254,6 +265,16 @@ export class AgentLoop {
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
+
+    if (this.provider === "venice") {
+      const veniceApiKey = this.config.veniceApiKey ?? VENICE_API_KEY ?? "";
+      const veniceConfig: VeniceConfig = {
+        apiKey: veniceApiKey,
+        baseUrl: VENICE_BASE_URL,
+        model: this.config.veniceModel || VENICE_MODEL,
+      };
+      this.venice = new VeniceClient(veniceConfig);
+    }
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
@@ -499,41 +520,81 @@ export class AgentLoop {
                 `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
               );
             }
-            // eslint-disable-next-line no-await-in-loop
+            if (this.provider === "venice" && this.venice) {
+              const veniceStream = this.venice.responses({
+                instructions: mergedInstructions,
+                input: turnInput as unknown as Array<Record<string, unknown>>,
+                stream: true,
+              });
+              
+              stream = (async function* () {
+                for await (const veniceResponse of veniceStream) {
+                  const content = veniceResponse.content?.[0]?.text || "";
+                  const responseId = veniceResponse.id;
+                  
+                  if (veniceResponse.type === "response.completed") {
+                    yield {
+                      type: "response.completed",
+                      response: {
+                        id: responseId,
+                        status: "completed",
+                        output: veniceResponse.content || [],
+                      },
+                    };
+                  } else {
+                    yield {
+                      type: "response.output_item.done",
+                      item: {
+                        type: "input_text",
+                        text: content,
+                      },
+                      response: {
+                        id: responseId,
+                        status: "in_progress",
+                        output: veniceResponse.content || [],
+                      },
+                    };
+                  }
+                }
+              })();
+            } else {
+              // eslint-disable-next-line no-await-in-loop
             stream = await this.oai.responses.create({
-              model: this.model,
-              instructions: mergedInstructions,
-              previous_response_id: lastResponseId || undefined,
-              input: turnInput,
-              stream: true,
-              parallel_tool_calls: false,
-              reasoning,
-              tools: [
-                {
-                  type: "function",
-                  name: "shell",
-                  description: "Runs a shell command, and returns its output.",
-                  strict: false,
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      command: { type: "array", items: { type: "string" } },
-                      workdir: {
-                        type: "string",
-                        description: "The working directory for the command.",
+                model: this.model,
+                instructions: mergedInstructions,
+                previous_response_id: lastResponseId || undefined,
+                input: turnInput,
+                stream: true,
+                parallel_tool_calls: false,
+                reasoning,
+                tools: [
+                  {
+                    type: "function",
+                    name: "shell",
+                    description:
+                      "Runs a shell command, and returns its output.",
+                    strict: false,
+                    parameters: {
+                      type: "object",
+                      properties: {
+                        command: { type: "array", items: { type: "string" } },
+                        workdir: {
+                          type: "string",
+                          description: "The working directory for the command.",
+                        },
+                        timeout: {
+                          type: "number",
+                          description:
+                            "The maximum time to wait for the command to complete in milliseconds.",
+                        },
                       },
-                      timeout: {
-                        type: "number",
-                        description:
-                          "The maximum time to wait for the command to complete in milliseconds.",
-                      },
+                      required: ["command"],
+                      additionalProperties: false,
                     },
-                    required: ["command"],
-                    additionalProperties: false,
                   },
-                },
-              ],
-            });
+                ],
+              });
+            }
             break;
           } catch (error) {
             const isTimeout = error instanceof APIConnectionTimeoutError;
@@ -692,7 +753,7 @@ export class AgentLoop {
               if (maybeReasoning.type === "reasoning") {
                 maybeReasoning.duration_ms = Date.now() - thinkingStart;
               }
-              if (item.type === "function_call") {
+              if (item && item.type === "function_call") {
                 // Track outstanding tool call so we can abort later if needed.
                 // The item comes from the streaming response, therefore it has
                 // either `id` (chat) or `call_id` (responses) – we normalise
@@ -717,7 +778,7 @@ export class AgentLoop {
               if (event.response.status === "completed") {
                 // TODO: remove this once we can depend on streaming events
                 const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output,
+                  event.response.output as unknown as Array<ResponseInputItem>,
                   stageItem,
                 );
                 turnInput = newTurnInput;

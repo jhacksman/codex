@@ -2,6 +2,7 @@ import { OPENAI_API_KEY } from "./config";
 import OpenAI from "openai";
 
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
+export const RECOMMENDED_VENICE_MODELS: Array<string> = ["deepseek-r1-671b"];
 
 /**
  * Background model loader / cache.
@@ -58,11 +59,13 @@ export async function getAvailableModels(): Promise<Array<string>> {
  */
 export async function isModelSupportedForResponses(
   model: string | undefined | null,
+  provider: string = "openai",
 ): Promise<boolean> {
   if (
     typeof model !== "string" ||
     model.trim() === "" ||
-    RECOMMENDED_MODELS.includes(model)
+    (provider === "openai" && RECOMMENDED_MODELS.includes(model)) ||
+    (provider === "venice" && RECOMMENDED_VENICE_MODELS.includes(model))
   ) {
     return true;
   }
