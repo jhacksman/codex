@@ -25,9 +25,9 @@ import {
   setSessionId,
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
+import { VeniceClient, type VeniceConfig } from "../venice/client.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
-import { VeniceClient, type VeniceConfig } from "../venice/client.js";
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -520,7 +520,6 @@ export class AgentLoop {
                 `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
               );
             }
-            // eslint-disable-next-line no-await-in-loop
             if (this.provider === "venice" && this.venice) {
               const veniceStream = this.venice.responses({
                 instructions: mergedInstructions,
@@ -778,7 +777,7 @@ export class AgentLoop {
               if (event.response.status === "completed") {
                 // TODO: remove this once we can depend on streaming events
                 const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output as any,
+                  event.response.output as unknown as ResponseInputItem[],
                   stageItem,
                 );
                 turnInput = newTurnInput;

@@ -44,83 +44,79 @@ export class VeniceClient {
     input: Array<Record<string, unknown>>;
     stream: boolean;
   }): AsyncGenerator<VeniceStreamResponse> {
-    try {
-      const response = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: this.getHeaders(),
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: "system", content: params.instructions },
-            ...params.input.map((item) => {
-              return { 
-                role: item['role'] || "user", 
-                content: item['content'] || item['text'] || "",
-              };
-            }),
-          ],
-          stream: params.stream,
-        }),
-      });
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: this.getHeaders(),
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: params.instructions },
+          ...params.input.map((item) => {
+            return { 
+              role: item['role'] || "user", 
+              content: item['content'] || item['text'] || "",
+            };
+          }),
+        ],
+        stream: params.stream,
+      }),
+    });
 
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Venice API error: ${response.status} - ${error}`);
-      }
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Venice API error: ${response.status} - ${error}`);
+    }
 
-      if (params.stream && response.body) {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
+    if (params.stream && response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) { break; }
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-          for (const line of lines) {
-            if (line.trim() === "" || line.trim() === "data: [DONE]") {
-              continue;
-            }
-            
-            if (line.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(line.slice(6));
+        for (const line of lines) {
+          if (line.trim() === "" || line.trim() === "data: [DONE]") {
+            continue;
+          }
+          
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
 
-                if (data.content) {
-                  data.content = this.filterThinkTags(data.content);
-                }
-
-                yield {
-                  id: data.id || `venice-${Date.now()}`,
-                  type: "response.output_item.done",
-                  content: [{ type: "input_text", text: data.content || "" }],
-                  role: data.role || "assistant",
-                };
-              } catch (e) {
+              if (data.content) {
+                data.content = this.filterThinkTags(data.content);
               }
+
+              yield {
+                id: data.id || `venice-${Date.now()}`,
+                type: "response.output_item.done",
+                content: [{ type: "input_text", text: data.content || "" }],
+                role: data.role || "assistant",
+              };
+            } catch (error: unknown) {
             }
           }
         }
-      } else {
-        const data = await response.json();
-
-        if (data.content) {
-          data.content = this.filterThinkTags(data.content);
-        }
-
-        yield {
-          id: data.id || `venice-${Date.now()}`,
-          type: "response.completed",
-          content: [{ type: "input_text", text: data.content || "" }],
-          role: data.role || "assistant",
-        };
       }
-    } catch (error) {
-      throw error;
+    } else {
+      const data = await response.json();
+
+      if (data.content) {
+        data.content = this.filterThinkTags(data.content);
+      }
+
+      yield {
+        id: data.id || `venice-${Date.now()}`,
+        type: "response.completed",
+        content: [{ type: "input_text", text: data.content || "" }],
+        role: data.role || "assistant",
+      };
     }
   }
 }
