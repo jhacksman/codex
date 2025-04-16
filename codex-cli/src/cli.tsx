@@ -48,6 +48,7 @@ const cli = meow(
     -v, --view <rollout>       Inspect a previously saved rollout instead of starting a session
     -q, --quiet                Non-interactive mode that only prints the assistant's final output
     -a, --approval-mode <mode> Override the approval policy: 'suggest', 'auto-edit', or 'full-auto'
+    -p, --provider <provider>  Provider to use for AI requests (openai or venice)
 
     --auto-edit                Automatically approve file edits; still prompt for commands
     --full-auto                Automatically approve edits and commands when executed in the sandbox
@@ -78,6 +79,11 @@ const cli = meow(
       help: { type: "boolean", aliases: ["h"] },
       view: { type: "string" },
       model: { type: "string", aliases: ["m"] },
+      provider: {
+        type: "string",
+        aliases: ["p"],
+        choices: ["openai", "venice"],
+      },
       image: { type: "string", isMultiple: true, aliases: ["i"] },
       quiet: {
         type: "boolean",
@@ -169,16 +175,16 @@ const imagePaths = cli.flags.image as Array<string> | undefined;
 config = {
   apiKey,
   ...config,
+  provider: cli.flags.provider || config.provider || "openai",
   model: model ?? config.model,
 };
 
-if (!(await isModelSupportedForResponses(config.model))) {
+if (!(await isModelSupportedForResponses(config.model, config.provider))) {
   // eslint-disable-next-line no-console
   console.error(
     `The model "${config.model}" does not appear in the list of models ` +
-      `available to your account. Double‑check the spelling (use\n` +
-      `  openai models list\n` +
-      `to see the full list) or choose another model with the --model flag.`,
+      `available for the ${config.provider} provider. Double‑check the spelling ` +
+      `or choose another model with the --model flag.`,
   );
   process.exit(1);
 }

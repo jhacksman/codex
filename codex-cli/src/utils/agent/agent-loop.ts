@@ -9,7 +9,13 @@ import type {
 import type { Reasoning } from "openai/resources.mjs";
 
 import { log, isLoggingEnabled } from "./log.js";
-import { OPENAI_BASE_URL, OPENAI_TIMEOUT_MS } from "../config.js";
+import { 
+  OPENAI_BASE_URL, 
+  OPENAI_TIMEOUT_MS, 
+  VENICE_BASE_URL,
+  VENICE_API_KEY,
+  VENICE_MODEL
+} from "../config.js";
 import { parseToolCallArguments } from "../parsers.js";
 import {
   ORIGIN,
@@ -21,6 +27,7 @@ import {
 import { handleExecCommand } from "./handle-exec-command.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
+import { VeniceClient, type VeniceConfig } from "../venice/client.js";
 
 export type CommandConfirmation = {
   review: ReviewDecision;
@@ -51,6 +58,7 @@ export class AgentLoop {
   private instructions?: string;
   private approvalPolicy: ApprovalPolicy;
   private config: AppConfig;
+  private provider: "openai" | "venice";
 
   // Using `InstanceType<typeof OpenAI>` sidesteps typing issues with the OpenAI package under
   // the TS 5+ `moduleResolution=bundler` setup. OpenAI client instance. We keep the concrete
@@ -58,6 +66,7 @@ export class AgentLoop {
   // the OpenAI SDK types may not perfectly match. The `typeof OpenAI` pattern captures the
   // instance shape without resorting to `any`.
   private oai: OpenAI;
+  private venice: VeniceClient | null = null;
 
   private onItem: (item: ResponseItem) => void;
   private onLoading: (loading: boolean) => void;
@@ -238,6 +247,8 @@ export class AgentLoop {
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = this.config.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    this.provider = this.config.provider || "openai";
+    
     this.oai = new OpenAI({
       // The OpenAI JS SDK only requires `apiKey` when making requests against
       // the official API.  When running unit‑tests we stub out all network
@@ -254,6 +265,16 @@ export class AgentLoop {
       },
       ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
     });
+    
+    if (this.provider === "venice") {
+      const veniceApiKey = this.config.veniceApiKey ?? VENICE_API_KEY ?? "";
+      const veniceConfig: VeniceConfig = {
+        apiKey: veniceApiKey,
+        baseUrl: VENICE_BASE_URL,
+        model: this.config.veniceModel || VENICE_MODEL,
+      };
+      this.venice = new VeniceClient(veniceConfig);
+    }
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
@@ -500,40 +521,48 @@ export class AgentLoop {
               );
             }
             // eslint-disable-next-line no-await-in-loop
-            stream = await this.oai.responses.create({
-              model: this.model,
-              instructions: mergedInstructions,
-              previous_response_id: lastResponseId || undefined,
-              input: turnInput,
-              stream: true,
-              parallel_tool_calls: false,
-              reasoning,
-              tools: [
-                {
-                  type: "function",
-                  name: "shell",
-                  description: "Runs a shell command, and returns its output.",
-                  strict: false,
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      command: { type: "array", items: { type: "string" } },
-                      workdir: {
-                        type: "string",
-                        description: "The working directory for the command.",
+            if (this.provider === "venice" && this.venice) {
+              stream = this.venice.responses({
+                instructions: mergedInstructions,
+                input: turnInput,
+                stream: true,
+              });
+            } else {
+              stream = await this.oai.responses.create({
+                model: this.model,
+                instructions: mergedInstructions,
+                previous_response_id: lastResponseId || undefined,
+                input: turnInput,
+                stream: true,
+                parallel_tool_calls: false,
+                reasoning,
+                tools: [
+                  {
+                    type: "function",
+                    name: "shell",
+                    description: "Runs a shell command, and returns its output.",
+                    strict: false,
+                    parameters: {
+                      type: "object",
+                      properties: {
+                        command: { type: "array", items: { type: "string" } },
+                        workdir: {
+                          type: "string",
+                          description: "The working directory for the command.",
+                        },
+                        timeout: {
+                          type: "number",
+                          description:
+                            "The maximum time to wait for the command to complete in milliseconds.",
+                        },
                       },
-                      timeout: {
-                        type: "number",
-                        description:
-                          "The maximum time to wait for the command to complete in milliseconds.",
-                      },
+                      required: ["command"],
+                      additionalProperties: false,
                     },
-                    required: ["command"],
-                    additionalProperties: false,
                   },
-                },
-              ],
-            });
+                ],
+              });
+            }
             break;
           } catch (error) {
             const isTimeout = error instanceof APIConnectionTimeoutError;
