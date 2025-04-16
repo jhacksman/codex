@@ -68,95 +68,113 @@ export class VeniceClient {
       });
     }
     
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: this.getHeaders(),
-      body: JSON.stringify({
-        model: this.model,
-        messages: messages,
-        stream: params.stream,
-      }),
-    });
+    try {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          model: this.model,
+          messages: messages,
+          stream: params.stream,
+        }),
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Venice API error: ${response.status} - ${error}`);
-    }
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Venice API error: ${response.status} - ${error}`);
+      }
 
-    if (params.stream && response.body) {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let responseId = `venice-${Date.now()}`;
+      if (params.stream && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let responseId = `venice-${Date.now()}`;
 
-      while (true) {
-        // eslint-disable-next-line no-await-in-loop
-        const { done, value } = await reader.read();
-        if (done) { 
-          yield {
-            id: responseId,
-            type: "response.completed",
-            content: [{ type: "input_text", text: "Response complete" }],
-            role: "assistant",
-          };
-          break; 
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.trim() === "" || line.trim() === "data: [DONE]") {
-            continue;
+        while (true) {
+          // eslint-disable-next-line no-await-in-loop
+          const { done, value } = await reader.read();
+          if (done) { 
+            yield {
+              id: responseId,
+              type: "response.completed",
+              content: [{ type: "input_text", text: "Response complete" }],
+              role: "assistant",
+            };
+            break; 
           }
-          
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              
-              let content = "";
-              if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-                const message = data.choices[0].message;
-                content = message.content || "";
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.trim() === "" || line.trim() === "data: [DONE]") {
+              continue;
+            }
+            
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6));
                 
-                content = this.filterThinkTags(content);
-                
-                if (data.id) {
-                  responseId = data.id;
+                if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+                  const message = data.choices[0].message;
+                  let content = message.content || "";
+                  
+                  // Filter out think tags
+                  content = this.filterThinkTags(content);
+                  
+                  if (content.trim() !== "") {
+                    if (data.id) {
+                      responseId = data.id;
+                    }
+                    
+                    yield {
+                      id: responseId,
+                      type: "response.output_item.done",
+                      content: [{ type: "input_text", text: content }],
+                      role: message.role || "assistant",
+                    };
+                  }
                 }
-                
-                yield {
-                  id: responseId,
-                  type: "response.output_item.done",
-                  content: [{ type: "input_text", text: content }],
-                  role: message.role || "assistant",
-                };
+              } catch (error: unknown) {
+                console.error("Error parsing Venice API response:", error);
               }
-            } catch (error: unknown) {
-              console.error("Error parsing Venice API response:", error);
             }
           }
         }
-      }
-    } else {
-      const data = await response.json();
-      let content = "";
-      let role = "assistant";
-      
-      if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-        const message = data.choices[0].message;
-        content = message.content || "";
-        role = message.role || "assistant";
+      } else {
+        const data = await response.json();
         
-        content = this.filterThinkTags(content);
+        if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+          const message = data.choices[0].message;
+          let content = message.content || "";
+          const role = message.role || "assistant";
+          
+          // Filter out think tags
+          content = this.filterThinkTags(content);
+          
+          yield {
+            id: data.id || `venice-${Date.now()}`,
+            type: "response.completed",
+            content: [{ type: "input_text", text: content }],
+            role: role,
+          };
+        } else {
+          yield {
+            id: data.id || `venice-${Date.now()}`,
+            type: "response.completed",
+            content: [{ type: "input_text", text: "No content in response" }],
+            role: "assistant",
+          };
+        }
       }
-
+    } catch (error) {
+      console.error("Venice API request failed:", error);
       yield {
-        id: data.id || `venice-${Date.now()}`,
+        id: `venice-error-${Date.now()}`,
         type: "response.completed",
-        content: [{ type: "input_text", text: content }],
-        role: role,
+        content: [{ type: "input_text", text: `Error: ${error}` }],
+        role: "assistant",
       };
     }
   }
