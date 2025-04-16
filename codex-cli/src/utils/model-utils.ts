@@ -2,7 +2,18 @@ import { OPENAI_API_KEY } from "./config";
 import OpenAI from "openai";
 
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];
-export const RECOMMENDED_VENICE_MODELS: Array<string> = ["deepseek-r1-671b"];
+export const RECOMMENDED_VENICE_MODELS: Array<string> = [
+  "deepseek-r1-671b",
+  "llama-3.2-3b",
+  "llama-3.3-70b",
+  "llama-3.1-405b",
+  "mistral-31-24b",
+  "qwen-2.5-qwq-32b",
+  "qwen-2.5-vl",
+  "dolphin-2.9.2-qwen2-72b",
+  "qwen-2.5-coder-32b",
+  "deepseek-coder-v2-lite"
+];
 
 /**
  * Background model loader / cache.
