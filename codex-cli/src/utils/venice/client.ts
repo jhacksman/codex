@@ -7,6 +7,14 @@ export interface VeniceStreamResponse {
   }>;
   role?: string;
   call_id?: string;
+  response?: {
+    id: string;
+    status: string;
+    output: Array<{
+      type: string;
+      text: string;
+    }>;
+  };
 }
 
 export interface VeniceConfig {
@@ -89,18 +97,27 @@ export class VeniceClient {
         const decoder = new TextDecoder();
         let buffer = "";
         let responseId = `venice-${Date.now()}`;
+        let isFirstChunk = true;
 
         while (true) {
-          // eslint-disable-next-line no-await-in-loop
           const { done, value } = await reader.read();
-          if (done) { 
+          
+          if (done) {
             yield {
               id: responseId,
               type: "response.completed",
               content: [{ type: "input_text", text: "Response complete" }],
               role: "assistant",
+              response: {
+                id: responseId,
+                status: "completed",
+                output: [{
+                  type: "input_text",
+                  text: ""
+                }]
+              }
             };
-            break; 
+            break;
           }
 
           buffer += decoder.decode(value, { stream: true });
@@ -120,10 +137,11 @@ export class VeniceClient {
                   const message = data.choices[0].message;
                   let content = message.content || "";
                   
-                  // Filter out think tags
                   content = this.filterThinkTags(content);
                   
-                  if (content.trim() !== "") {
+                  if (isFirstChunk || content.trim() !== "") {
+                    isFirstChunk = false;
+                    
                     if (data.id) {
                       responseId = data.id;
                     }
@@ -133,6 +151,14 @@ export class VeniceClient {
                       type: "response.output_item.done",
                       content: [{ type: "input_text", text: content }],
                       role: message.role || "assistant",
+                      response: {
+                        id: responseId,
+                        status: "in_progress",
+                        output: [{
+                          type: "input_text",
+                          text: content
+                        }]
+                      }
                     };
                   }
                 }
@@ -150,7 +176,6 @@ export class VeniceClient {
           let content = message.content || "";
           const role = message.role || "assistant";
           
-          // Filter out think tags
           content = this.filterThinkTags(content);
           
           yield {
@@ -158,6 +183,14 @@ export class VeniceClient {
             type: "response.completed",
             content: [{ type: "input_text", text: content }],
             role: role,
+            response: {
+              id: data.id || `venice-${Date.now()}`,
+              status: "completed",
+              output: [{
+                type: "input_text",
+                text: content
+              }]
+            }
           };
         } else {
           yield {
@@ -165,6 +198,14 @@ export class VeniceClient {
             type: "response.completed",
             content: [{ type: "input_text", text: "No content in response" }],
             role: "assistant",
+            response: {
+              id: data.id || `venice-${Date.now()}`,
+              status: "completed",
+              output: [{
+                type: "input_text",
+                text: "No content in response"
+              }]
+            }
           };
         }
       }
@@ -175,6 +216,14 @@ export class VeniceClient {
         type: "response.completed",
         content: [{ type: "input_text", text: `Error: ${error}` }],
         role: "assistant",
+        response: {
+          id: `venice-error-${Date.now()}`,
+          status: "error",
+          output: [{
+            type: "input_text",
+            text: `Error: ${error}`
+          }]
+        }
       };
     }
   }
