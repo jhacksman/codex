@@ -87,11 +87,20 @@ export class VeniceClient {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let responseId = `venice-${Date.now()}`;
 
       while (true) {
         // eslint-disable-next-line no-await-in-loop
         const { done, value } = await reader.read();
-        if (done) { break; }
+        if (done) { 
+          yield {
+            id: responseId,
+            type: "response.completed",
+            content: [{ type: "input_text", text: "Response complete" }],
+            role: "assistant",
+          };
+          break; 
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -105,35 +114,49 @@ export class VeniceClient {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-
-              if (data.content) {
-                data.content = this.filterThinkTags(data.content);
+              
+              let content = "";
+              if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+                const message = data.choices[0].message;
+                content = message.content || "";
+                
+                content = this.filterThinkTags(content);
+                
+                if (data.id) {
+                  responseId = data.id;
+                }
+                
+                yield {
+                  id: responseId,
+                  type: "response.output_item.done",
+                  content: [{ type: "input_text", text: content }],
+                  role: message.role || "assistant",
+                };
               }
-
-              yield {
-                id: data.id || `venice-${Date.now()}`,
-                type: "response.output_item.done",
-                content: [{ type: "input_text", text: data.content || "" }],
-                role: data.role || "assistant",
-              };
             } catch (error: unknown) {
-              // Ignore JSON parsing errors in stream data
+              console.error("Error parsing Venice API response:", error);
             }
           }
         }
       }
     } else {
       const data = await response.json();
-
-      if (data.content) {
-        data.content = this.filterThinkTags(data.content);
+      let content = "";
+      let role = "assistant";
+      
+      if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+        const message = data.choices[0].message;
+        content = message.content || "";
+        role = message.role || "assistant";
+        
+        content = this.filterThinkTags(content);
       }
 
       yield {
         id: data.id || `venice-${Date.now()}`,
         type: "response.completed",
-        content: [{ type: "input_text", text: data.content || "" }],
-        role: data.role || "assistant",
+        content: [{ type: "input_text", text: content }],
+        role: role,
       };
     }
   }
