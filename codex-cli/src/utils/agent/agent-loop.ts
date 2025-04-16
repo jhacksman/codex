@@ -524,7 +524,7 @@ export class AgentLoop {
             if (this.provider === "venice" && this.venice) {
               const veniceStream = this.venice.responses({
                 instructions: mergedInstructions,
-                input: turnInput,
+                input: turnInput as unknown as Record<string, unknown>[],
                 stream: true,
               });
               
