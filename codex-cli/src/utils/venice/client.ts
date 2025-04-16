@@ -44,20 +44,36 @@ export class VeniceClient {
     input: Array<Record<string, unknown>>;
     stream: boolean;
   }): AsyncGenerator<VeniceStreamResponse> {
+    const messages = [
+      { role: "system", content: params.instructions }
+    ];
+    
+    for (const item of params.input) {
+      let content = "";
+      if (typeof item['content'] === "string") {
+        content = item['content'];
+      } else if (typeof item['text'] === "string") {
+        content = item['text'];
+      } else if (Array.isArray(item['content'])) {
+        const contentArray = item['content'] as Array<Record<string, unknown>>;
+        content = contentArray
+          .map(c => typeof c['text'] === "string" ? c['text'] : "")
+          .filter(Boolean)
+          .join("\n");
+      }
+      
+      messages.push({
+        role: typeof item['role'] === "string" ? item['role'] : "user",
+        content: content
+      });
+    }
+    
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: this.getHeaders(),
       body: JSON.stringify({
         model: this.model,
-        messages: [
-          { role: "system", content: params.instructions },
-          ...params.input.map((item) => {
-            return { 
-              role: item['role'] || "user", 
-              content: item['content'] || item['text'] || "",
-            };
-          }),
-        ],
+        messages: messages,
         stream: params.stream,
       }),
     });
