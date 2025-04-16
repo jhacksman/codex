@@ -523,7 +523,7 @@ export class AgentLoop {
             if (this.provider === "venice" && this.venice) {
               const veniceStream = this.venice.responses({
                 instructions: mergedInstructions,
-                input: turnInput as unknown as Record<string, unknown>[],
+                input: turnInput as unknown as Array<Record<string, unknown>>,
                 stream: true,
               });
               
@@ -558,7 +558,8 @@ export class AgentLoop {
                 }
               })();
             } else {
-              stream = await this.oai.responses.create({
+              // eslint-disable-next-line no-await-in-loop
+            stream = await this.oai.responses.create({
                 model: this.model,
                 instructions: mergedInstructions,
                 previous_response_id: lastResponseId || undefined,
@@ -777,7 +778,7 @@ export class AgentLoop {
               if (event.response.status === "completed") {
                 // TODO: remove this once we can depend on streaming events
                 const newTurnInput = await this.processEventsWithoutStreaming(
-                  event.response.output as unknown as ResponseInputItem[],
+                  event.response.output as unknown as Array<ResponseInputItem>,
                   stageItem,
                 );
                 turnInput = newTurnInput;

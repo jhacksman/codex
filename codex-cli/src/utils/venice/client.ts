@@ -73,6 +73,7 @@ export class VeniceClient {
       let buffer = "";
 
       while (true) {
+        // eslint-disable-next-line no-await-in-loop
         const { done, value } = await reader.read();
         if (done) { break; }
 
@@ -100,6 +101,7 @@ export class VeniceClient {
                 role: data.role || "assistant",
               };
             } catch (error: unknown) {
+              // Ignore JSON parsing errors in stream data
             }
           }
         }
