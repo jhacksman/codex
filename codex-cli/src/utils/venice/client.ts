@@ -7,6 +7,14 @@ export interface VeniceStreamResponse {
   }>;
   role?: string;
   call_id?: string;
+  response?: {
+    id: string;
+    status: string;
+    output: Array<{
+      type: string;
+      text: string;
+    }>;
+  };
 }
 
 export interface VeniceConfig {
@@ -87,11 +95,28 @@ export class VeniceClient {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      const responseId = `venice-${Date.now()}`;
+      let isFirstChunk = true;
 
       while (true) {
         // eslint-disable-next-line no-await-in-loop
         const { done, value } = await reader.read();
-        if (done) { break; }
+        
+        if (done) {
+          yield {
+            id: responseId,
+            type: "response.completed",
+            response: {
+              id: responseId,
+              status: "completed",
+              output: [{
+                type: "input_text",
+                text: ""
+              }]
+            }
+          };
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -105,35 +130,70 @@ export class VeniceClient {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-
-              if (data.content) {
-                data.content = this.filterThinkTags(data.content);
+              
+              let content = "";
+              
+              if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+                const message = data.choices[0].message;
+                content = message.content || "";
+                
+                content = this.filterThinkTags(content);
+                
+                if (isFirstChunk || content.trim()) {
+                  isFirstChunk = false;
+                  
+                  yield {
+                    id: responseId,
+                    type: "response.output_item.done",
+                    content: [{ 
+                      type: "input_text", 
+                      text: content 
+                    }],
+                    response: {
+                      id: responseId,
+                      status: "in_progress",
+                      output: [{
+                        type: "input_text",
+                        text: content
+                      }]
+                    }
+                  };
+                }
               }
-
-              yield {
-                id: data.id || `venice-${Date.now()}`,
-                type: "response.output_item.done",
-                content: [{ type: "input_text", text: data.content || "" }],
-                role: data.role || "assistant",
-              };
             } catch (error: unknown) {
-              // Ignore JSON parsing errors in stream data
+              // Silently ignore JSON parsing errors in stream data
             }
           }
         }
       }
     } else {
       const data = await response.json();
-
-      if (data.content) {
-        data.content = this.filterThinkTags(data.content);
+      const responseId = data.id || `venice-${Date.now()}`;
+      
+      let content = "";
+      
+      if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+        const message = data.choices[0].message;
+        content = message.content || "";
+        
+        content = this.filterThinkTags(content);
       }
 
       yield {
-        id: data.id || `venice-${Date.now()}`,
+        id: responseId,
         type: "response.completed",
-        content: [{ type: "input_text", text: data.content || "" }],
-        role: data.role || "assistant",
+        content: [{ 
+          type: "input_text", 
+          text: content 
+        }],
+        response: {
+          id: responseId,
+          status: "completed",
+          output: [{
+            type: "input_text",
+            text: content
+          }]
+        }
       };
     }
   }
