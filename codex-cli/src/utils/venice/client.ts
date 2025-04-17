@@ -47,43 +47,59 @@ export class VeniceClient {
     return text.replace(/<think>[\s\S]*?<\/think>/g, "");
   }
 
+  private formatMessages(instructions: string, input: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const messages = [
+      { role: "system", content: instructions }
+    ];
+    
+    for (const item of input) {
+      if (item['content'] && Array.isArray(item['content'])) {
+        const contentArray = item['content'] as Array<Record<string, unknown>>;
+        let textContent = "";
+        
+        for (const contentItem of contentArray) {
+          if (contentItem['type'] === "input_text" && typeof contentItem['text'] === "string") {
+            textContent += contentItem['text'];
+          } else if (contentItem['type'] === "input_image") {
+            continue;
+          }
+        }
+        
+        messages.push({
+          role: (item['role'] as string) || "user",
+          content: textContent
+        });
+      } else if (item['text'] && typeof item['text'] === "string") {
+        messages.push({
+          role: (item['role'] as string) || "user",
+          content: item['text']
+        });
+      } else if (item['content'] && typeof item['content'] === "string") {
+        messages.push({
+          role: (item['role'] as string) || "user",
+          content: item['content']
+        });
+      }
+    }
+    
+    return messages;
+  }
+
   async *responses(params: {
     instructions: string;
     input: Array<Record<string, unknown>>;
     stream: boolean;
   }): AsyncGenerator<VeniceStreamResponse> {
-    const messages = [
-      { role: "system", content: params.instructions }
-    ];
-    
-    for (const item of params.input) {
-      let content = "";
-      if (typeof item['content'] === "string") {
-        content = item['content'];
-      } else if (typeof item['text'] === "string") {
-        content = item['text'];
-      } else if (Array.isArray(item['content'])) {
-        const contentArray = item['content'] as Array<Record<string, unknown>>;
-        content = contentArray
-          .map(c => typeof c['text'] === "string" ? c['text'] : "")
-          .filter(Boolean)
-          .join("\n");
-      }
-      
-      messages.push({
-        role: typeof item['role'] === "string" ? item['role'] : "user",
-        content: content
-      });
-    }
-    
     try {
+      const messages = this.formatMessages(params.instructions, params.input);
+      
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: "POST",
         headers: this.getHeaders(),
         body: JSON.stringify({
           model: this.model,
           messages: messages,
-          stream: params.stream,
+          stream: params.stream
         }),
       });
 
@@ -100,6 +116,7 @@ export class VeniceClient {
         let isFirstChunk = true;
 
         while (true) {
+          // eslint-disable-next-line no-await-in-loop
           const { done, value } = await reader.read();
           
           if (done) {
@@ -133,36 +150,63 @@ export class VeniceClient {
               try {
                 const data = JSON.parse(line.slice(6));
                 
-                if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-                  const message = data.choices[0].message;
-                  let content = message.content || "";
+                if (data.choices && data.choices.length > 0) {
+                  const choice = data.choices[0];
                   
-                  content = this.filterThinkTags(content);
-                  
-                  if (isFirstChunk || content.trim() !== "") {
-                    isFirstChunk = false;
+                  if (choice.delta && choice.delta.content) {
+                    const content = this.filterThinkTags(choice.delta.content);
                     
-                    if (data.id) {
-                      responseId = data.id;
-                    }
-                    
-                    yield {
-                      id: responseId,
-                      type: "response.output_item.done",
-                      content: [{ type: "input_text", text: content }],
-                      role: message.role || "assistant",
-                      response: {
-                        id: responseId,
-                        status: "in_progress",
-                        output: [{
-                          type: "input_text",
-                          text: content
-                        }]
+                    if (isFirstChunk || content.trim() !== "") {
+                      isFirstChunk = false;
+                      
+                      if (data.id) {
+                        responseId = data.id;
                       }
-                    };
+                      
+                      yield {
+                        id: responseId,
+                        type: "response.output_item.done",
+                        content: [{ type: "input_text", text: content }],
+                        role: "assistant",
+                        response: {
+                          id: responseId,
+                          status: "in_progress",
+                          output: [{
+                            type: "input_text",
+                            text: content
+                          }]
+                        }
+                      };
+                    }
+                  } else if (choice.message && choice.message.content) {
+                    const content = this.filterThinkTags(choice.message.content);
+                    
+                    if (isFirstChunk || content.trim() !== "") {
+                      isFirstChunk = false;
+                      
+                      if (data.id) {
+                        responseId = data.id;
+                      }
+                      
+                      yield {
+                        id: responseId,
+                        type: "response.output_item.done",
+                        content: [{ type: "input_text", text: content }],
+                        role: choice.message.role || "assistant",
+                        response: {
+                          id: responseId,
+                          status: "in_progress",
+                          output: [{
+                            type: "input_text",
+                            text: content
+                          }]
+                        }
+                      };
+                    }
                   }
                 }
               } catch (error: unknown) {
+                // Ignore JSON parsing errors in stream data
                 console.error("Error parsing Venice API response:", error);
               }
             }
