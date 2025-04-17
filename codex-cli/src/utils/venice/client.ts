@@ -7,6 +7,14 @@ export interface VeniceStreamResponse {
   }>;
   role?: string;
   call_id?: string;
+  response?: {
+    id: string;
+    status: string;
+    output: Array<{
+      type: string;
+      text: string;
+    }>;
+  };
 }
 
 export interface VeniceConfig {
@@ -104,11 +112,30 @@ export class VeniceClient {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let responseId = `venice-${Date.now()}`;
+        let isFirstChunk = true;
 
         while (true) {
           // eslint-disable-next-line no-await-in-loop
           const { done, value } = await reader.read();
-          if (done) { break; }
+          
+          if (done) {
+            yield {
+              id: responseId,
+              type: "response.completed",
+              content: [{ type: "input_text", text: "Response complete" }],
+              role: "assistant",
+              response: {
+                id: responseId,
+                status: "completed",
+                output: [{
+                  type: "input_text",
+                  text: ""
+                }]
+              }
+            };
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -129,17 +156,58 @@ export class VeniceClient {
                   if (choice.delta && choice.delta.content) {
                     const content = this.filterThinkTags(choice.delta.content);
                     
-                    yield {
-                      id: data.id || `venice-${Date.now()}`,
-                      type: "response.output_item.done",
-                      content: [{ type: "input_text", text: content }],
-                      role: "assistant",
-                    };
+                    if (isFirstChunk || content.trim() !== "") {
+                      isFirstChunk = false;
+                      
+                      if (data.id) {
+                        responseId = data.id;
+                      }
+                      
+                      yield {
+                        id: responseId,
+                        type: "response.output_item.done",
+                        content: [{ type: "input_text", text: content }],
+                        role: "assistant",
+                        response: {
+                          id: responseId,
+                          status: "in_progress",
+                          output: [{
+                            type: "input_text",
+                            text: content
+                          }]
+                        }
+                      };
+                    }
+                  } else if (choice.message && choice.message.content) {
+                    const content = this.filterThinkTags(choice.message.content);
+                    
+                    if (isFirstChunk || content.trim() !== "") {
+                      isFirstChunk = false;
+                      
+                      if (data.id) {
+                        responseId = data.id;
+                      }
+                      
+                      yield {
+                        id: responseId,
+                        type: "response.output_item.done",
+                        content: [{ type: "input_text", text: content }],
+                        role: choice.message.role || "assistant",
+                        response: {
+                          id: responseId,
+                          status: "in_progress",
+                          output: [{
+                            type: "input_text",
+                            text: content
+                          }]
+                        }
+                      };
+                    }
                   }
                 }
               } catch (error: unknown) {
                 // Ignore JSON parsing errors in stream data
-                console.error("Error parsing stream data:", error);
+                console.error("Error parsing Venice API response:", error);
               }
             }
           }
@@ -147,24 +215,60 @@ export class VeniceClient {
       } else {
         const data = await response.json();
         
-        if (data.choices && data.choices.length > 0) {
-          const choice = data.choices[0];
+        if (data.choices && data.choices.length > 0 && data.choices[0].message) {
+          const message = data.choices[0].message;
+          let content = message.content || "";
+          const role = message.role || "assistant";
           
-          if (choice.message && choice.message.content) {
-            const content = this.filterThinkTags(choice.message.content);
-            
-            yield {
+          content = this.filterThinkTags(content);
+          
+          yield {
+            id: data.id || `venice-${Date.now()}`,
+            type: "response.completed",
+            content: [{ type: "input_text", text: content }],
+            role: role,
+            response: {
               id: data.id || `venice-${Date.now()}`,
-              type: "response.completed",
-              content: [{ type: "input_text", text: content }],
-              role: "assistant",
-            };
-          }
+              status: "completed",
+              output: [{
+                type: "input_text",
+                text: content
+              }]
+            }
+          };
+        } else {
+          yield {
+            id: data.id || `venice-${Date.now()}`,
+            type: "response.completed",
+            content: [{ type: "input_text", text: "No content in response" }],
+            role: "assistant",
+            response: {
+              id: data.id || `venice-${Date.now()}`,
+              status: "completed",
+              output: [{
+                type: "input_text",
+                text: "No content in response"
+              }]
+            }
+          };
         }
       }
     } catch (error) {
       console.error("Venice API request failed:", error);
-      throw error;
+      yield {
+        id: `venice-error-${Date.now()}`,
+        type: "response.completed",
+        content: [{ type: "input_text", text: `Error: ${error}` }],
+        role: "assistant",
+        response: {
+          id: `venice-error-${Date.now()}`,
+          status: "error",
+          output: [{
+            type: "input_text",
+            text: `Error: ${error}`
+          }]
+        }
+      };
     }
   }
 }
